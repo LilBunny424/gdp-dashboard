@@ -1,151 +1,129 @@
 import streamlit as st
-import pandas as pd
-import math
-from pathlib import Path
+import requests
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+api_key = "https://api.airvisual.com/v2/countries?key"
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+st.title("Weather and Air Quality Web App")
+st.header("Streamlit and AirVisual API")
+
 
 @st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+def map_creator(latitude, longitude):
+    from streamlit_folium import folium_static
+    import folium
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+    # center on the station
+    m = folium.Map(location=[latitude, longitude], zoom_start=10)
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+    # add marker for the station
+    folium.Marker([latitude, longitude], popup="Station", tooltip="Station").add_to(m)
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+    # call to render Folium map in Streamlit
+    folium_static(m)
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+@st.cache_data
+def generate_list_of_countries():
+    countries_url = f"https://api.airvisual.com/v2/countries?key={api_key}"
+    countries_dict = requests.get(countries_url).json()
+    return countries_dict
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+@st.cache_data
+def generate_list_of_states(country_selected):
+    states_url = f"https://api.airvisual.com/v2/states?country={country_selected}&key={api_key}"
+    states_dict = requests.get(states_url).json()
+    return states_dict
 
-    return gdp_df
+@st.cache_data
+def generate_list_of_cities(state_selected, country_selected):
+    cities_url = f"https://api.airvisual.com/v2/cities?state={state_selected}&country={country_selected}&key={api_key}"
+    cities_dict = requests.get(cities_url).json()
+    return cities_dict
 
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
+category = st.selectbox(
+    "Choose an option",
+    ["By City, State, and Country", "By Nearest City (IP Address)", "By Latitude and Longitude"]
 )
 
-''
-''
+if category == "By City, State, and Country":
+    countries_dict = generate_list_of_countries()
+    if countries_dict["status"] == "success":
+        countries_list = [i["country"] for i in countries_dict["data"]]
+        countries_list.insert(0, "")
+        country_selected = st.selectbox("Select a country", options=countries_list)
+        if country_selected:
+            states_dict = generate_list_of_states(country_selected)
+            if states_dict["status"] == "success":
+                states_list = [i["state"] for i in states_dict["data"]]
+                states_list.insert(0, "")
+                state_selected = st.selectbox("Select a state", options=states_list)
+                if state_selected:
+                    cities_dict = generate_list_of_cities(state_selected, country_selected)
+                    if cities_dict["status"] == "success":
+                        cities_list = [i["city"] for i in cities_dict["data"]]
+                        cities_list.insert(0, "")
+                        city_selected = st.selectbox("Select a city", options=cities_list)
+                        if city_selected:
+                            aqi_data_url = f"https://api.airvisual.com/v2/city?city={city_selected}&state={state_selected}&country={country_selected}&key={api_key}"
+                            aqi_data_dict = requests.get(aqi_data_url).json()
 
+                            if aqi_data_dict["status"] == "success":
+                                aqi_data = aqi_data_dict["data"]
+                                st.subheader(f"Weather and Air Quality in {city_selected}, {state_selected}, {country_selected}")
+                                st.write(f"Temperature: {aqi_data['current']['weather']['tp']}°C")
+                                st.write(f"Humidity: {aqi_data['current']['weather']['hu']}%")
+                                st.write(f"Wind Speed: {aqi_data['current']['weather']['ws']} m/s")
+                                st.write(f"Air Quality Index: {aqi_data['current']['pollution']['aqius']} (US AQI)")
+                                map_creator(aqi_data['location']['coordinates'][1], aqi_data['location']['coordinates'][0])
+                            else:
+                                st.warning("No data available for this location.")
+                    else:
+                        st.warning("No cities available, please select another state.")
+            else:
+                st.warning("No states available, please select another country.")
+    else:
+        st.error("Too many requests. Wait for a few minutes before your next API call.")
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+elif category == "By Nearest City (IP Address)":
+    url = f"https://api.airvisual.com/v2/nearest_city?key={api_key}"
+    aqi_data_dict = requests.get(url).json()
 
-st.header(f'GDP in {to_year}', divider='gray')
+    if aqi_data_dict["status"] == "success":
+        aqi_data = aqi_data_dict["data"]
+        st.subheader("Weather and Air Quality for Nearest City")
+        st.write(f"City: {aqi_data['city']}")
+        st.write(f"State: {aqi_data['state']}")
+        st.write(f"Country: {aqi_data['country']}")
+        st.write(f"Temperature: {aqi_data['current']['weather']['tp']}°C")
+        st.write(f"Humidity: {aqi_data['current']['weather']['hu']}%")
+        st.write(f"Wind Speed: {aqi_data['current']['weather']['ws']} m/s")
+        st.write(f"Air Quality Index: {aqi_data['current']['pollution']['aqius']} (US AQI)")
+        map_creator(aqi_data['location']['coordinates'][1], aqi_data['location']['coordinates'][0])
+    else:
+        st.warning("No data available for this location.")
 
-''
+elif category == "By Latitude and Longitude":
+    latitude = st.text_input("Enter latitude")
+    longitude = st.text_input("Enter longitude")
 
-cols = st.columns(4)
+    if latitude and longitude:
+        try:
+            lat = float(latitude)
+            lon = float(longitude)
+            url = f"https://api.airvisual.com/v2/nearest_city?lat={lat}&lon={lon}&key={api_key}"
+            aqi_data_dict = requests.get(url).json()
 
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[gdp_df['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[gdp_df['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+            if aqi_data_dict["status"] == "success":
+                aqi_data = aqi_data_dict["data"]
+                st.subheader("Weather and Air Quality by Coordinates")
+                st.write(f"City: {aqi_data['city']}")
+                st.write(f"State: {aqi_data['state']}")
+                st.write(f"Country: {aqi_data['country']}")
+                st.write(f"Temperature: {aqi_data['current']['weather']['tp']}°C")
+                st.write(f"Humidity: {aqi_data['current']['weather']['hu']}%")
+                st.write(f"Wind Speed: {aqi_data['current']['weather']['ws']} m/s")
+                st.write(f"Air Quality Index: {aqi_data['current']['pollution']['aqius']} (US AQI)")
+                map_creator(aqi_data['location']['coordinates'][1], aqi_data['location']['coordinates'][0])
+            else:
+                st.warning("No data available for this location.")
+        except ValueError:
+            st.error("Invalid latitude or longitude values.")
